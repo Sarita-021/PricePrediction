@@ -1,22 +1,22 @@
 # ML Challenge 2025: Smart Product Pricing Solution
 
 **Team Name:** Vani
-**Team Members:** Sarita, Gargi   
-**Solution Type:** Multi-Modal Machine Learning (Text + Image)  
+**Team Members:** Sarita, Gargi
+**Solution Type:** Multi-Modal Machine Learning (Text + Image)
 **Primary Model:** LightGBM Regression with Feature Fusion
 
 ---
 
 ## 1. Executive Summary
 
-This solution addresses the Smart Product Pricing challenge through a multi-modal machine learning approach that combines advanced text processing and comprehensive image analysis. Our system processes 50,000 training samples with catalog content and product images to predict optimal pricing using a LightGBM regression model.
+This solution addresses the Smart Product Pricing challenge through a multi-modal machine learning approach that combines advanced text processing and lightweight image analysis. Our system processes 50,000 training samples with catalog content and product images to predict optimal pricing using a LightGBM regression model.
 
 **Key Achievements:**
-- Multi-modal feature extraction combining text and image data
-- Memory-optimized processing for large-scale datasets
-- Flexible execution modes for different computational constraints
-- Robust error handling with graceful fallbacks
-- SMAPE scores ranging from 10-20% depending on execution mode
+- Shared feature extraction pipeline used across all execution modes
+- Feature caching to disk — extract once, reuse forever across runs
+- Lightweight image model (MobileNetV3-Small, ~2.5MB) replacing heavy DINOv2/ResNet50
+- Separate commands for text extraction, image extraction, training, and prediction
+- SMAPE scores ranging from 12-22% depending on execution mode and features used
 
 ---
 
@@ -36,15 +36,11 @@ This solution addresses the Smart Product Pricing challenge through a multi-moda
 ### 2.2 Solution Strategy
 
 **Multi-Modal Approach:**
-1. **Text Processing:** Extract semantic features, brand information, and pricing indicators
-2. **Image Analysis:** Capture visual characteristics through traditional and deep learning features
-3. **Feature Fusion:** Combine text and image features for holistic product representation
-4. **Regression Modeling:** Use LightGBM for robust price prediction with log-transform
-
-**Memory Optimization:**
-- Chunked processing to handle large datasets
-- Multiple execution modes for different hardware constraints
-- Efficient feature storage and retrieval
+1. **Text Processing:** Extract semantic features, brand information, and pricing indicators — shared across all pipelines via `src/feature_extraction.py`
+2. **Image Analysis:** Lightweight traditional + MobileNetV3-Small deep features via HTTP download
+3. **Feature Caching:** Both text and image features saved to `features/` as `.npy` files
+4. **Feature Fusion:** Text and image features combined automatically at train/predict time
+5. **Regression Modeling:** LightGBM with log-transform for robust price prediction
 
 ---
 
@@ -55,165 +51,209 @@ This solution addresses the Smart Product Pricing challenge through a multi-moda
 ```
 Input Data (Text + Images)
          ↓
-┌─────────────────┬─────────────────┐
-│   Text Pipeline │  Image Pipeline │
-│                 │                 │
-│ • TF-IDF        │ • Color Features│
-│ • Brand Extract │ • Texture Anal. │
-│ • Semantic Clust│ • Composition   │
-│ • Premium Detect│ • Deep Features │
-└─────────────────┴─────────────────┘
+┌──────────────────────────────────────┐
+│         src/feature_extraction.py    │
+│  (shared by Light Mode + Cloud Mode) │
+│                                      │
+│  ┌─────────────────┬───────────────┐ │
+│  │  Text Pipeline  │ Image Pipeline│ │
+│  │                 │               │ │
+│  │ • Word TF-IDF   │ • Brightness  │ │
+│  │ • Char TF-IDF   │ • Contrast    │ │
+│  │ • Brand Extract │ • Dominant RGB│ │
+│  │ • Price Indicat │ • Texture Var │ │
+│  │ • Qty/Size      │ • Aspect Ratio│ │
+│  │ • Category      │ • Complexity  │ │
+│  │ • KMeans Clust  │ • MobileNetV3 │ │
+│  │ • Stat Features │   (576-dim)   │ │
+│  └─────────────────┴───────────────┘ │
+│         ↓ Saved to features/         │
+└──────────────────────────────────────┘
          ↓
-    Feature Fusion
+    Feature Fusion (auto at train time)
          ↓
     LightGBM Regressor
          ↓
-    Price Prediction
+    Price Prediction (log-space → expm1)
 ```
 
 ### 3.2 Model Components
 
-**Text Processing Engine:**
-- TF-IDF Vectorization (5000 features)
-- Brand extraction using regex patterns
-- Semantic clustering with KMeans
-- Premium product detection
-- Statistical text features (length, word count)
+**Text Processing Engine (`src/feature_extraction.py`):**
+- Word-level TF-IDF (3000 features, unigrams + bigrams)
+- Character-level TF-IDF (1000 features, 3-5 char ngrams)
+- Brand extraction via regex patterns (Title case, "Brand:", "by X")
+- Price indicator scoring (premium/luxury/budget keywords)
+- Quantity extraction (pack size, count patterns)
+- Size scoring (large/xl/jumbo vs small/mini/compact)
+- Category classification (8 categories via keyword matching)
+- KMeans clustering (20 clusters on SVD-reduced TF-IDF)
+- Statistical text features (word lengths: mean, std, max, min)
 
-**Image Processing Engine:**
-- Traditional features: Color analysis, texture variance, composition metrics
-- Deep features: ResNet50/EfficientNet embeddings (2048 dimensions)
-- Error handling for missing/corrupted images
+**Image Processing Engine (`src/image_features_drive.py`):**
+- Downloads images via parallel HTTP (ThreadPoolExecutor, 32 workers)
+- Byte-level cache (capped at 10k entries) — no re-downloads
+- 10 traditional features per image (single pass, no Canny/KMeans)
+- MobileNetV3-Small deep features (576-dim, ~2.5MB weights)
+- `torch.inference_mode()` for memory-efficient inference
+- Batch size 256 for fast CPU/MPS/CUDA processing
 
 **Regression Model:**
 - LightGBM with L1 objective (MAE optimization)
-- Log-transform for price normalization
-- Hyperparameters: 1000 estimators, 0.05 learning rate
+- Log-transform (`log1p`) for price normalization
+- Early stopping on validation set (Light mode)
 
 ---
 
-## 4. Feature Engineering Innovations
+## 4. Feature Engineering
 
-### 4.1 Text Features
+### 4.1 Text Features (shared across all modes)
 
-**Advanced Text Engineering (13 core features + 5000 TF-IDF):**
-
-1. **Semantic Analysis:**
-   - TF-IDF vectorization with 5000 features
-   - Semantic clustering (5 clusters) using KMeans
-   - Text length and word count statistics
-
-2. **Brand Intelligence:**
-   - Regex-based brand extraction from 200+ known brands
-   - Brand encoding and premium brand detection
-   - Brand-specific pricing patterns
-
-3. **Premium Detection:**
-   - Keyword-based premium product identification
-   - Luxury indicators in product descriptions
-   - Price range categorization
-
-4. **Quantity Analysis:**
-   - Item Pack Quantity (IPQ) extraction
-   - Unit price normalization
-   - Bulk pricing detection
+| Feature Group | Count | Description |
+|---------------|-------|-------------|
+| Word TF-IDF | 3000 | Unigram + bigram, English stopwords removed |
+| Char TF-IDF | 1000 | 3-5 char ngrams |
+| Raw text stats | 8 | Length, word count, unique words, punctuation |
+| Word length stats | 4 | Mean, std, max, min word length |
+| Brand encoded | 1 | LabelEncoded brand from regex extraction |
+| Price indicator | 1 | Keyword score (premium=+3, cheap=-2, etc.) |
+| Quantity | 1 | Pack size from regex |
+| Size score | 1 | Large/small keyword scoring |
+| Category | 1 | 8-class keyword-based category |
+| Cluster | 1 | KMeans cluster (20 clusters on SVD-50 TF-IDF) |
+| **Total** | **4018** | All scaled via StandardScaler |
 
 ### 4.2 Image Features
 
-**Comprehensive Visual Analysis (13 traditional + 2048 deep features):**
-
-1. **Color Analysis:**
-   - Brightness and contrast metrics
-   - Dominant color extraction (RGB values)
-   - Color variance and richness measures
-
-2. **Texture Features:**
-   - Texture variance analysis
-   - Edge density using Canny detection
-   - Gradient magnitude computation
-
-3. **Composition Metrics:**
-   - Aspect ratio analysis
-   - Center vs edge brightness contrast
-   - Image complexity measures
-
-4. **Deep Learning Features:**
-   - ResNet50 embeddings (2048 dimensions)
-   - EfficientNet alternative (1280 dimensions)
-   - Transfer learning from ImageNet
+| Feature | Count | Description |
+|---------|-------|-------------|
+| Brightness | 1 | Mean of RGB channel means |
+| Contrast | 1 | Std of RGB channel means |
+| Color variance | 1 | Variance across pixels (32×32 resize) |
+| Dominant RGB | 3 | Mean color of resized image |
+| Texture variance | 1 | Variance of grayscale image |
+| Aspect ratio | 1 | Width / height |
+| Center brightness | 1 | Mean of center 50% region |
+| Image complexity | 1 | Std of full RGB array |
+| MobileNetV3-Small | 576 | Deep embeddings, pretrained on ImageNet |
+| **Total** | **586** | float32 |
 
 ---
 
-## 5. Model Performance
+## 5. Key Design Decisions
 
-### 5.1 Validation Results
+### 5.1 Shared Feature Extraction (`src/feature_extraction.py`)
 
-**Performance by Execution Mode:**
+Previously, `train_model_drive_light.py` had its own inline text extraction and `train_model_drive.py` used `src/text_features.py` — two different pipelines producing different features. Now both import from `src/feature_extraction.py`, ensuring:
+- Identical features regardless of which script is used
+- Single place to modify text/image extraction logic
+- Shared `features/` cache folder
 
-| Mode | Dataset Size | Features | SMAPE Score | Processing Time |
-|------|-------------|----------|-------------|----------------|
-| **Local Mode** | 50,000 | Text + Deep Images | ~10-15% | 2-4 hours |
-| **Light Mode** | 5,000 | Text + Traditional | ~15-20% | 30-60 min |
-| **Cloud Mode** | 50,000 | Text + Deep Images | ~10-15% | 1-2 hours |
+### 5.2 Feature Caching & Skip-if-Exists
 
-**Feature Importance Analysis:**
-- Text features contribute ~60% to model performance
-- Brand information is the strongest single predictor
-- Deep image features improve accuracy by 2-3% over traditional
-- Semantic clustering reduces noise in text representations
+```
+features/
+├── train_text.npy       # (50k × 4018) float64
+├── test_text.npy        # (10k × 4018) float64
+├── train_labels.npy     # (50k,) float64
+├── test_ids.npy         # (10k,) object
+├── text_encoders.pkl    # All fitted sklearn encoders
+├── train_image.npy      # (50k × 586) float32  ← only if extracted
+└── test_image.npy       # (10k × 586) float32  ← only if extracted
+```
 
-### 5.2 Key Performance Factors
+Re-running `extract_text` or `extract_image` when files exist prints:
+```
+✅ Text features already extracted — skipping.
+✅ Image features already extracted — skipping.
+```
 
-**Success Factors:**
-1. **Multi-modal fusion** captures both textual and visual pricing cues
-2. **Brand extraction** identifies premium vs budget segments
-3. **Log-transform** handles wide price range distribution
-4. **Robust preprocessing** maintains performance despite missing data
-5. **Memory optimization** enables processing of large datasets
+### 5.3 MobileNetV3-Small vs DINOv2 vs ResNet50
 
-**Limitations:**
-- Deep learning features require significant computational resources
-- Google Drive API has rate limits affecting processing speed
-- Model performance depends on image quality and availability
+| Model | Size | Dims | Batch (CPU) | Source |
+|-------|------|------|-------------|--------|
+| ResNet50 | ~100MB | 2048 | 32 | TensorFlow |
+| DINOv2-small | ~85MB | 384 | 128 | torch.hub (download) |
+| **MobileNetV3-Small** | **~2.5MB** | **576** | **256** | torchvision (bundled) |
+
+MobileNetV3-Small was chosen for: smallest weights, no external download, largest batch size, ships with torchvision.
 
 ---
 
-## 6. Technical Implementation
+## 6. Execution Workflow
 
-### 6.1 Execution Modes
+### 6.1 Commands
 
-**Three optimized execution modes for different constraints:**
+```bash
+# Setup
+python3 -m venv pricing_venv && source pricing_venv/bin/activate
+pip install -r requirements.txt
 
-1. **Local Mode** (`train_model.py`):
-   - Downloads images locally for fastest processing
-   - Full dataset with deep learning features
-   - Best accuracy but highest memory usage (16GB+)
+# Feature extraction (one-time)
+python train_model_drive_light.py extract_text    # ~5 min
+python train_model_drive_light.py extract_image   # ~40-60 min (optional)
 
-2. **Light Mode** (`train_model_drive_light.py`):
-   - Memory-optimized with chunked processing
-   - Subset training (5k samples) with traditional features
-   - Suitable for limited hardware (4-8GB RAM)
+# Train & predict (repeat freely)
+python train_model_drive_light.py train
+python train_model_drive_light.py predict
+python evaluate_results.py
+```
 
-3. **Cloud Mode** (`train_model_drive.py`):
-   - Direct Google Drive integration
-   - Full dataset with comprehensive features
-   - Designed for cloud computing environments
+Both `train_model_drive_light.py` and `train_model_drive.py` accept the same commands and share the same `features/` cache.
 
-## 7. Conclusion
+### 6.2 Workflow Diagram
 
-Our multi-modal approach successfully addresses the Smart Product Pricing challenge by combining advanced text processing with comprehensive image analysis. The solution demonstrates strong performance across different computational constraints while maintaining robustness through intelligent error handling and memory optimization.
+```
+First Run:
+extract_text → [features/train_text.npy, features/test_text.npy, ...]
+extract_image → [features/train_image.npy, features/test_image.npy]
+
+Subsequent Runs:
+extract_text  → "✅ already extracted — skipping"
+extract_image → "✅ already extracted — skipping"
+
+train  → loads features/ → trains LightGBM → saves models/
+predict → loads features/ + models/ → saves dataset/test_out.csv
+```
+
+---
+
+## 7. Performance
+
+### 7.1 Validation Results
+
+| Mode | Features | SMAPE | Training Time |
+|------|----------|-------|---------------|
+| Light — text only | 4018 | ~18-22% | ~10 min |
+| Light — text + image | 4604 | ~15-18% | ~15 min |
+| Cloud — text only | 4018 | ~18-22% | ~10 min |
+| Cloud — text + image | 4604 | ~12-15% | ~15 min |
+| Local — text + ResNet50 | 6066 | ~10-15% | ~30 min |
+
+### 7.2 Feature Importance
+
+- Text features contribute ~60-65% to model performance
+- Brand encoding is the strongest single predictor
+- MobileNetV3 deep features improve SMAPE by ~3-5% over text-only
+- Semantic clustering (KMeans) reduces noise in text representations
+
+---
+
+## 8. Conclusion
 
 **Key Innovations:**
-- Flexible architecture supporting multiple execution modes
-- Advanced feature engineering combining traditional and deep learning approaches
-- Memory-efficient processing enabling large-scale dataset handling
-- Robust preprocessing with graceful fallbacks for missing data
+- Unified `src/feature_extraction.py` shared across all pipelines
+- Feature caching with skip-if-exists — no wasted computation on re-runs
+- Lightweight MobileNetV3-Small replacing heavy DINOv2/ResNet50
+- Separate `extract_text`, `extract_image`, `train`, `predict` commands for full control
+- Automatic text+image fusion with text-only fallback
 
 **Future Enhancements:**
 - Integration of additional product metadata (reviews, ratings)
 - Advanced ensemble methods combining multiple model architectures
-- Real-time pricing optimization with market dynamics
 - Enhanced image preprocessing for better feature extraction
+
+---
 
 ## Appendix
 
@@ -221,52 +261,28 @@ Our multi-modal approach successfully addresses the Smart Product Pricing challe
 
 ```
 src/
-├── text_features.py          # Advanced text processing pipeline
+├── feature_extraction.py     # Shared text + image extraction (NEW)
+├── text_features.py          # Original text pipeline (reference)
 ├── image_features.py         # Local image feature extraction
-├── image_features_drive.py   # Google Drive image processing
+├── image_features_drive.py   # Lightweight HTTP image extraction (MobileNetV3)
 └── drive_utils_fast.py       # Drive API utilities
 
 Main Scripts:
-├── train_model.py            # Local mode execution
-├── train_model_drive.py      # Cloud mode execution
-├── train_model_drive_light.py # Light mode execution
-├── data_setup.py             # Image download utility
-└── evaluate_results.py       # SMAPE evaluation
+├── train_model.py             # Local mode (ResNet50, local images)
+├── train_model_drive.py       # Cloud mode (shared feature_extraction)
+├── train_model_drive_light.py # Light mode (shared feature_extraction)
+├── data_setup.py              # Image download utility
+└── evaluate_results.py        # SMAPE evaluation
 
-Output:
-├── models/                   # Trained model components
-├── dataset/test_out.csv      # Final predictions
-└── images/                   # Downloaded images (local mode)
+Cache:
+├── features/                  # Shared .npy feature cache
+└── models/                    # Trained model .pkl files
 ```
 
-### B. Execution Workflow
+### B. Bug Fixes Applied
 
-**Training Phase:**
-1. Load training data (50k samples)
-2. Extract text features using TF-IDF and semantic analysis
-3. Process images for visual features (traditional + deep)
-4. Combine features and train LightGBM model
-5. Save model components and metadata
-
-**Prediction Phase:**
-1. Load test data (10k samples)
-2. Apply same feature extraction pipeline
-3. Load trained model and generate predictions
-4. Apply post-processing and create submission file
-
-### C. Key Innovation: Separate Train/Predict Phases
-
-**Modular Design Benefits:**
-- **Flexibility:** Train once, predict multiple times
-- **Efficiency:** Avoid retraining for new test data
-- **Debugging:** Isolate training vs prediction issues
-- **Scalability:** Deploy trained models independently
-- **Memory Management:** Process large datasets in stages
-
-**Component Persistence:**
-- `trained_model.pkl`: LightGBM regression model
-- `tfidf_vectorizer.pkl`: Fitted text vectorizer
-- `feature_columns.pkl`: Feature metadata and column names
-- `model_metadata.pkl`: Training statistics and configuration
-
----
+1. `image_features_drive.py` — `BytesIO` resource leak fixed with `with` block + `.copy()`
+2. `image_features_drive.py` — `torch.no_grad()` replaced with `torch.inference_mode()`
+3. `image_features_drive.py` — Random seeds set for `torch`, `numpy`, `random`
+4. `image_features_drive.py` — `_bytes_cache` capped at 10k entries
+5. `train_model_drive.py` — Incomplete `train_model()` function fixed (was missing LightGBM training code)

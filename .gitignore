@@ -26,6 +26,8 @@ env/
 ENV/
 .venv/
 .env/
+pricing_venv/
+features/
 
 # Jupyter Notebook
 .ipynb_checkpoints
