@@ -96,6 +96,33 @@ def train_model():
     Y_train_log = np.log1p(np.load(f'{FEATURES_DIR}/train_labels.npy'))
     print(f"✓ Training features shape: {X_train.shape}")
 
+    print("🧠 Training LightGBM Model...")
+    model = lgb.LGBMRegressor(
+        objective='regression_l1', metric='mae',
+        n_estimators=1000, learning_rate=0.05,
+        num_leaves=31, n_jobs=-1, random_state=42, verbose=-1
+    )
+    model.fit(X_train, Y_train_log)
+
+    import matplotlib.pyplot as plt
+    lgb.plot_importance(model, importance_type='gain', max_num_features=30, figsize=(10, 6), title='Feature Importance (Gain)')
+    plt.tight_layout()
+    plt.savefig('models/feature_importance_gain.png')
+
+    lgb.plot_importance(model, importance_type='split', max_num_features=30, figsize=(10, 6), title='Feature Importance (Split)')
+    plt.tight_layout()
+    plt.savefig('models/feature_importance_split.png')
+    plt.show()
+
+    smape_score = smape(np.load(f'{FEATURES_DIR}/train_labels.npy'), np.expm1(model.predict(X_train)))
+    print(f"✓ Training SMAPE: {smape_score:.4f}%")
+
+    metadata = {'total_features': X_train.shape[1], 'training_smape': smape_score}
+    pickle.dump(model, open(os.path.join(MODELS_FOLDER, 'trained_model.pkl'), 'wb'))
+    pickle.dump(metadata, open(os.path.join(MODELS_FOLDER, 'model_metadata.pkl'), 'wb'))
+    print("✅ Training completed and model saved!")
+    return True
+
 def predict_test_data():
     """Generate predictions from saved features"""
     if not os.path.exists(f'{FEATURES_DIR}/test_text.npy'):

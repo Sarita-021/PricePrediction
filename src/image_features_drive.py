@@ -136,11 +136,7 @@ def extract_deep_features_mobilenet(links: list[str], batch_size: int = 256) -> 
     if not TORCH_AVAILABLE:
         return np.zeros((len(links), 576), dtype=np.float32)
 
-    device = (
-        'cuda' if torch.cuda.is_available()
-        else 'mps'  if torch.backends.mps.is_available()
-        else 'cpu'
-    )
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'  # MPS skipped — segfault on macOS
     print(f"   MobileNetV3 device: {device}")
     model = _load_mobilenet(device)
 

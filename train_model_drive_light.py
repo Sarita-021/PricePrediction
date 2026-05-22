@@ -57,7 +57,17 @@ def train_model():
     y_val_original = np.expm1(y_val)
     score = smape(y_val_original, pred)
     print(f"Validation SMAPE: {score:.2f}%")
-    
+
+    import matplotlib.pyplot as plt
+    lgb.plot_importance(lgb_model, importance_type='gain', max_num_features=30, figsize=(10, 6), title='Feature Importance (Gain)')
+    plt.tight_layout()
+    plt.savefig('models/feature_importance_gain.png')
+
+    lgb.plot_importance(lgb_model, importance_type='split', max_num_features=30, figsize=(10, 6), title='Feature Importance (Split)')
+    plt.tight_layout()
+    plt.savefig('models/feature_importance_split.png')
+    plt.show()
+
     os.makedirs('models', exist_ok=True)
     pickle.dump(lgb_model, open('models/advanced_model.pkl', 'wb'))
     print("✅ Model saved!")
@@ -73,6 +83,11 @@ def predict():
     sample_ids = np.load(f'{FEATURES_DIR}/test_ids.npy')
 
     model = pickle.load(open('models/advanced_model.pkl', 'rb'))
+    expected = model.n_features_in_
+    if X_test.shape[1] < expected:
+        X_test = np.hstack([X_test, np.zeros((X_test.shape[0], expected - X_test.shape[1]))])
+    elif X_test.shape[1] > expected:
+        X_test = X_test[:, :expected]
     pred = np.expm1(model.predict(X_test))
     pred = np.clip(pred, 0.01, None)
 
